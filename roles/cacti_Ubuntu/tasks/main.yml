@@ -1,0 +1,100 @@
+---
+- name: Install LAMP stack packages
+  apt:
+    name:
+      - apache2
+      - mysql-server
+      - php
+      - php-mysql
+      - libapache2-mod-php
+      - php-snmp
+      - php-rrdtool
+      - snmp
+      - rrdtool
+      - php-xml
+      - php-mbstring
+      - php-ldap
+      - php-gd
+      - php-gmp
+    state: present
+
+- name: Start and enable Apache service
+  service:
+    name: apache2
+    state: started
+    enabled: yes
+
+    - name: Start and enable MySQL service
+      service:
+        name: mysql
+        state: started
+        enabled: yes
+
+    - name: Secure MySQL installation
+      mysql_secure_installation:
+        login_password: ""
+        new_password: "{{ mysql_root_password }}"
+        change_root_password: yes
+        remove_anonymous_user: yes
+        remove_test_database: yes
+        disallow_root_login_remotely: yes
+      ignore_errors: yes
+
+    - name: Ensure Cacti database is present
+      mysql_db:
+        name: "{{ cacti_db_name }}"
+        state: present
+        login_user: "root"
+        login_password: "{{ mysql_root_password }}"
+
+    - name: Ensure Cacti user has access to the Cacti database
+      mysql_user:
+        name: "{{ cacti_db_user }}"
+        password: "{{ cacti_db_password }}"
+        priv: "{{ cacti_db_name }}.*:ALL"
+        state: present
+        login_user: "root"
+        login_password: "{{ mysql_root_password }}"
+
+    - name: Download and extract Cacti
+      unarchive:
+        src: https://www.cacti.net/downloads/cacti-latest.tar.gz
+        dest: /opt
+        remote_src: yes
+      notify: configure cacti
+
+  handlers:
+    - name: configure cacti
+      block:
+        - name: Set timezone in php.ini
+          lineinfile:
+            path: /etc/php/{{ php_version }}/apache2/php.ini
+            regexp: '^;?date.timezone ='
+            line: 'date.timezone = {{ timezone }}'
+          notify: restart apache2
+
+        - name: Copy Cacti database config
+          copy:
+            src: /opt/cacti/include/config.php.dist
+            dest: /opt/cacti/include/config.php
+          notify: restart apache2
+
+        - name: Update Cacti database config
+          lineinfile:
+            path: /opt/cacti/include/config.php
+            regexp: "{{ item.regexp }}"
+            line: "{{ item.line }}"
+          loop:
+            - { regexp: '^\$database_type\s*=', line: "$database_type = 'mysql';" }
+            - { regexp: '^\$database_default\s*=', line: "$database_default = '{{ cacti_db_name }}';" }
+            - { regexp: '^\$database_hostname\s*=', line: "$database_hostname = 'localhost';" }
+            - { regexp: '^\$database_username\s*=', line: "$database_username = '{{ cacti_db_user }}';" }
+            - { regexp: '^\$database_password\s*=', line: "$database_password = '{{ cacti_db_password }}';" }
+            - { regexp: '^\$url_path\s*=', line: "$url_path = '/cacti/';" }
+          notify: restart apache2
+
+    - name: restart apache2
+      service:
+        name: apache2
+        state: restarted
+
